@@ -15,6 +15,11 @@
   #ammo { position: absolute; right: 20px; bottom: 20px; font-size: 28px; text-shadow: 2px 2px 0 #000; }
   #dash { position: absolute; right: 20px; bottom: 60px; width: 120px; height: 8px; background: rgba(255,255,255,.2); }
   #dash div { height: 100%; width: 100%; background: #4fc3f7; }
+  #scope { position: absolute; inset: 0; display: none; background: radial-gradient(circle at center, transparent 0, transparent 34vmin, #000 34.3vmin); }
+  #scope::before, #scope::after { content: ""; position: absolute; background: #000; }
+  #scope::before { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-1px); }
+  #scope::after { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-1px); }
+  #weapon { position: absolute; right: 20px; bottom: 76px; font-size: 16px; text-shadow: 2px 2px 0 #000; text-align: right; }
   #wave { position: absolute; top: 20px; width: 100%; text-align: center; font-size: 22px; text-shadow: 2px 2px 0 #000; }
   #hurt { position: absolute; inset: 0; background: radial-gradient(transparent 40%, rgba(255,0,0,.6)); opacity: 0; transition: opacity .3s; }
   #hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) rotate(45deg); width: 28px; height: 28px; opacity: 0; }
@@ -29,17 +34,19 @@
 <body>
 <div id="hud">
   <div id="hurt"></div>
+  <div id="scope"></div>
   <div id="crosshair"></div>
   <div id="hitmarker"></div>
   <div id="wave"></div>
   <div id="stats"></div>
   <div id="ammo"></div>
   <div id="dash"><div id="dashbar"></div></div>
+  <div id="weapon"></div>
 </div>
 <div id="overlay">
   <h1>SCRAPPY FPS</h1>
   <p id="msg">Click to play</p>
-  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash</p>
+  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash<br>1 / 2 or scroll to switch weapon · Right-click scope (sniper)</p>
 </div>
 
 <script type="importmap">
@@ -105,21 +112,44 @@ for (let i = 0; i < 40; i++) {
   addBox(x, z, tall ? 2 : s, tall ? rnd(5, 9) : rnd(1, 3), tall ? 2 : s, tall ? 0x8a8a9a : 0x9b6b3a);
 }
 
-// ---------- gun ----------
-const gun = new THREE.Group();
+// ---------- guns ----------
+const gun = new THREE.Group(); // holder that bobs/recoils; weapon models live inside
 const gunMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.15, 0.6), gunMat);
-const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.4), gunMat);
-barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.03, -0.45);
-const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.1), new THREE.MeshLambertMaterial({ color: 0x553311 }));
-grip.position.set(0, -0.15, 0.15); grip.rotation.x = 0.3;
-gun.add(body, barrel, grip);
+const woodMat = new THREE.MeshLambertMaterial({ color: 0x553311 });
+function part(geo, mat, x, y, z, rx = 0) {
+  const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.x = rx; return m;
+}
+// rifle
+const rifleModel = new THREE.Group();
+rifleModel.add(
+  part(new THREE.BoxGeometry(0.12, 0.15, 0.6), gunMat, 0, 0, 0),
+  part(new THREE.CylinderGeometry(0.03, 0.03, 0.4), gunMat, 0, 0.03, -0.45, Math.PI / 2),
+  part(new THREE.BoxGeometry(0.08, 0.2, 0.1), woodMat, 0, -0.15, 0.15, 0.3),
+);
+// sniper: long barrel, scope, stock
+const sniperModel = new THREE.Group();
+const sniperMat = new THREE.MeshLambertMaterial({ color: 0x2f3b2a });
+sniperModel.add(
+  part(new THREE.BoxGeometry(0.1, 0.13, 0.7), sniperMat, 0, 0, 0),
+  part(new THREE.CylinderGeometry(0.022, 0.022, 0.9), gunMat, 0, 0.02, -0.75, Math.PI / 2),
+  part(new THREE.CylinderGeometry(0.045, 0.045, 0.35), gunMat, 0, 0.13, -0.05, Math.PI / 2),
+  part(new THREE.BoxGeometry(0.02, 0.06, 0.04), gunMat, 0, 0.08, -0.05),
+  part(new THREE.BoxGeometry(0.09, 0.16, 0.3), woodMat, 0, -0.04, 0.45),
+  part(new THREE.BoxGeometry(0.07, 0.18, 0.08), woodMat, 0, -0.14, 0.12, 0.3),
+);
+gun.add(rifleModel, sniperModel);
 const flash = new THREE.Mesh(new THREE.SphereGeometry(0.08), new THREE.MeshBasicMaterial({ color: 0xffdd55 }));
-flash.position.set(0, 0.03, -0.7); flash.visible = false;
+flash.visible = false;
 gun.add(flash);
 const GUN_POS = new THREE.Vector3(0.25, -0.22, -0.5);
 gun.position.copy(GUN_POS);
 camera.add(gun);
+
+const WEAPONS = [
+  { name: 'RIFLE',  model: rifleModel,  mag: 12, rate: 140,  dmg: 1, auto: true,  reloadMs: 1100, pierce: false, kick: 1,   flashZ: -0.7 },
+  { name: 'SNIPER', model: sniperModel, mag: 5,  rate: 1100, dmg: 6, auto: false, reloadMs: 1800, pierce: true,  kick: 2.5, flashZ: -1.25 },
+];
+let weapon = WEAPONS[0];
 
 // ---------- audio (synth blips) ----------
 let actx;
@@ -138,11 +168,11 @@ function sfx(freq, dur, type = 'square', vol = 0.15, slide = 0) {
 const keys = {};
 const vel = new THREE.Vector3();
 let onGround = true;
-let health, score, wave, ammo, reloading, lastShot, alive, waveTimer;
+let health, score, wave, reloading, reloadTimer, lastShot, alive, waveTimer, scoped = false, switchT = 0;
 let dashTime = 0, dashCd = 0;
 const dashDir = new THREE.Vector3();
 const DASH_SPEED = 30, DASH_DUR = 0.16, DASH_CD = 1.2;
-const MAG = 12, PLAYER_R = 0.4, EYE = 1.6;
+const PLAYER_R = 0.4, EYE = 1.6;
 const enemies = [];
 const particles = [];
 const $ = id => document.getElementById(id);
@@ -150,7 +180,9 @@ const $ = id => document.getElementById(id);
 function reset() {
   for (const e of enemies) scene.remove(e.mesh);
   enemies.length = 0;
-  health = 100; score = 0; wave = 0; ammo = MAG; reloading = false; lastShot = 0; alive = true; waveTimer = 0;
+  health = 100; score = 0; wave = 0; reloading = false; clearTimeout(reloadTimer);
+  for (const w of WEAPONS) w.ammo = w.mag;
+  equip(0, true); lastShot = 0; alive = true; waveTimer = 0;
   player.position.set(0, EYE, 0); vel.set(0, 0, 0);
   player.rotation.y = 0; camera.rotation.x = 0;
   dashTime = 0; dashCd = 0;
@@ -176,7 +208,7 @@ function spawnEnemy() {
   mesh.position.set(x, 0.9 * mesh.scale.y, z);
   scene.add(mesh);
   enemies.push({
-    mesh, mat, hp: tough ? 5 : 2, speed: (tough ? 2.5 : 3.5) + wave * 0.25,
+    mesh, mat, tough, hp: tough ? 5 : 2, speed: (tough ? 2.5 : 3.5) + wave * 0.25,
     baseColor: mat.color.getHex(), flash: 0, attackCd: 0, bob: Math.random() * 10,
   });
 }
@@ -210,41 +242,80 @@ function groundHeight(x, z, feetY) {
 // ---------- shooting ----------
 const ray = new THREE.Raycaster();
 let recoil = 0;
+function equip(i, silent = false) {
+  const w = WEAPONS[i];
+  if (!w || (w === weapon && !silent)) return;
+  clearTimeout(reloadTimer); reloading = false; // switching cancels a reload
+  weapon = w; scoped = false;
+  for (const x of WEAPONS) x.model.visible = x === w;
+  flash.position.set(0, 0.03, w.flashZ);
+  if (!silent) { switchT = 0.3; sfx(250, 0.06, 'triangle', 0.08); }
+}
+
+function findEnemy(obj) {
+  while (obj) { const e = enemies.find(e => e.mesh === obj); if (e) return e; obj = obj.parent; }
+  return null;
+}
+
+const tracers = [];
+function tracer(from, to) {
+  const g = new THREE.BufferGeometry().setFromPoints([from, to]);
+  const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xfff3b0, transparent: true }));
+  l.userData.life = 0.25;
+  scene.add(l); tracers.push(l);
+}
+
 function shoot() {
   const now = performance.now();
-  if (!alive || reloading || now - lastShot < 140) return;
-  if (ammo <= 0) { sfx(120, 0.05, 'square', 0.05); reload(); return; }
-  lastShot = now; ammo--; recoil = 1;
-  flash.visible = true; setTimeout(() => flash.visible = false, 40);
-  sfx(160, 0.12, 'sawtooth', 0.2, -120);
+  const w = weapon;
+  if (!alive || reloading || switchT > 0 || now - lastShot < w.rate) return;
+  if (w.ammo <= 0) { sfx(120, 0.05, 'square', 0.05); reload(); return; }
+  lastShot = now; w.ammo--; recoil = w.kick;
+  flash.visible = !scoped; setTimeout(() => flash.visible = false, 40);
+  if (w === WEAPONS[1]) { sfx(90, 0.4, 'sawtooth', 0.3, -70); sfx(1400, 0.08, 'square', 0.1, -1200); }
+  else sfx(160, 0.12, 'sawtooth', 0.2, -120);
 
-  ray.setFromCamera({ x: 0, y: 0 }, camera);
+  // sniper is inaccurate when hip-firing, dead-on when scoped
+  const spread = w === WEAPONS[1] && !scoped ? 0.08 : 0;
+  ray.setFromCamera({ x: rnd(-spread, spread), y: rnd(-spread, spread) }, camera);
   const targets = [...enemies.map(e => e.mesh), ...obstacles.map(o => o.mesh), floor];
-  const hit = ray.intersectObjects(targets, true)[0];
-  if (!hit) return;
-  let obj = hit.object;
-  while (obj.parent && !enemies.find(e => e.mesh === obj)) obj = obj.parent;
-  const enemy = enemies.find(e => e.mesh === obj);
-  burst(hit.point, enemy ? 0xff3333 : 0xcccccc, enemy ? 10 : 5);
-  if (enemy) {
-    enemy.hp--; enemy.flash = 0.1;
+  const hits = ray.intersectObjects(targets, true);
+
+  let landed = false, end = null;
+  const done = new Set();
+  for (const hit of hits) {
+    const enemy = findEnemy(hit.object);
+    end = hit.point;
+    if (!enemy) { burst(hit.point, 0xcccccc, 5); break; }  // wall/floor stops the bullet
+    if (done.has(enemy)) continue;
+    done.add(enemy); landed = true;
+    burst(hit.point, 0xff3333, w.pierce ? 20 : 10);
+    enemy.hp -= w.dmg; enemy.flash = 0.1;
+    if (enemy.hp <= 0) kill(enemy);
+    if (!w.pierce) break;                                  // sniper rounds go through enemies
+  }
+  if (w === WEAPONS[1]) {
+    const from = new THREE.Vector3(); flash.getWorldPosition(from);
+    tracer(from, end || ray.ray.at(120, new THREE.Vector3()));
+  }
+  if (landed) {
     const hm = $('hitmarker'); hm.style.opacity = 1; setTimeout(() => hm.style.opacity = 0, 80);
     sfx(900, 0.05, 'square', 0.08);
-    if (enemy.hp <= 0) kill(enemy);
   }
-  if (ammo === 0) reload();
+  if (w.ammo === 0) reload();
 }
 function reload() {
-  if (reloading || ammo === MAG) return;
-  reloading = true;
+  const w = weapon;
+  if (reloading || w.ammo === w.mag || switchT > 0) return;
+  reloading = true; scoped = false;
   sfx(400, 0.1, 'triangle', 0.1);
-  setTimeout(() => { ammo = MAG; reloading = false; sfx(600, 0.1, 'triangle', 0.1); }, 1100);
+  reloadTimer = setTimeout(() => { w.ammo = w.mag; reloading = false; sfx(600, 0.1, 'triangle', 0.1); }, w.reloadMs);
 }
 function kill(e) {
   burst(e.mesh.position, e.baseColor, 30, 6);
   scene.remove(e.mesh);
   enemies.splice(enemies.indexOf(e), 1);
-  score += e.hp === 0 && e.mesh.scale.x > 1 ? 250 : 100;
+  score += e.tough ? 250 : 100;
   sfx(200, 0.3, 'square', 0.15, -180);
   if (Math.random() < 0.15) health = Math.min(100, health + 15);
 }
@@ -275,14 +346,26 @@ document.addEventListener('pointerlockchange', () => {
   if (!locked && alive) $('msg').textContent = 'Paused — click to resume';
 });
 let mouseDown = false;
-document.addEventListener('mousedown', e => { if (document.pointerLockElement && e.button === 0) { mouseDown = true; shoot(); } });
-document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; });
+document.addEventListener('mousedown', e => {
+  if (!document.pointerLockElement) return;
+  if (e.button === 0) { mouseDown = true; shoot(); }
+  if (e.button === 2 && weapon === WEAPONS[1] && !reloading && switchT <= 0) { scoped = true; sfx(700, 0.04, 'square', 0.05); }
+});
+document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; if (e.button === 2) scoped = false; });
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('wheel', e => {
+  if (!document.pointerLockElement || !e.deltaY) return;
+  const i = WEAPONS.indexOf(weapon);
+  equip((i + (e.deltaY > 0 ? 1 : -1) + WEAPONS.length) % WEAPONS.length);
+});
 document.addEventListener('mousemove', e => {
   if (!document.pointerLockElement) return;
-  player.rotation.y -= e.movementX * 0.0022;
-  camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x - e.movementY * 0.0022));
+  const sens = scoped ? 0.0007 : 0.0022;
+  player.rotation.y -= e.movementX * sens;
+  camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x - e.movementY * sens));
 });
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); if (e.code === 'KeyQ') wantDash = true; });
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); if (e.code === 'KeyQ') wantDash = true;
+  if (e.code === 'Digit1') equip(0); if (e.code === 'Digit2') equip(1); });
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -334,8 +417,12 @@ function update(dt) {
     vel.x = dashDir.x * DASH_SPEED; vel.z = dashDir.z * DASH_SPEED;
     vel.y = Math.max(vel.y, 0); // hang in the air briefly
   }
-  const targetFov = 75 + (dashTime > 0 ? 15 : 0);
-  if (Math.abs(camera.fov - targetFov) > 0.1) { camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 15); camera.updateProjectionMatrix(); }
+  const targetFov = scoped ? 20 : 75 + (dashTime > 0 ? 15 : 0);
+  if (Math.abs(camera.fov - targetFov) > 0.1) { camera.fov += (targetFov - camera.fov) * Math.min(1, dt * (scoped ? 25 : 15)); camera.updateProjectionMatrix(); }
+  const fullyScoped = scoped && camera.fov < 30;
+  $('scope').style.display = fullyScoped ? 'block' : 'none';
+  $('crosshair').style.display = scoped ? 'none' : 'block';
+  gun.visible = !fullyScoped;
 
   if (keys.Space && onGround) { vel.y = 7; onGround = false; }
   vel.y -= 20 * dt;
@@ -358,10 +445,12 @@ function update(dt) {
   // gun bob & recoil
   if (move.lengthSq() && onGround) bobT += dt * speed * 1.6;
   recoil = Math.max(0, recoil - dt * 8);
-  gun.position.set(GUN_POS.x + Math.sin(bobT) * 0.015, GUN_POS.y + Math.abs(Math.cos(bobT)) * 0.015 - (reloading ? 0.15 : 0), GUN_POS.z + recoil * 0.08);
-  gun.rotation.x = recoil * 0.25 + (reloading ? -0.6 : 0);
+  switchT = Math.max(0, switchT - dt);
+  const dip = (reloading ? 0.15 : 0) + switchT * 1.2;
+  gun.position.set(GUN_POS.x + Math.sin(bobT) * 0.015, GUN_POS.y + Math.abs(Math.cos(bobT)) * 0.015 - dip, GUN_POS.z + recoil * 0.08);
+  gun.rotation.x = recoil * 0.25 + (reloading ? -0.6 : 0) - switchT * 2;
 
-  if (mouseDown) shoot(); // full auto
+  if (mouseDown && weapon.auto) shoot(); // full auto (rifle only)
 
   // enemies
   const pp = player.position;
@@ -397,7 +486,8 @@ function update(dt) {
   $('stats').innerHTML = `HP ${Math.ceil(health)}<br>SCORE ${score}<br>ENEMIES ${enemies.length}`;
   $('dashbar').style.width = `${100 * (1 - Math.max(0, dashCd) / DASH_CD)}%`;
   $('dashbar').style.background = dashCd <= 0 ? '#4fc3f7' : '#888';
-  $('ammo').textContent = reloading ? 'RELOADING…' : `${ammo} / ${MAG}`;
+  $('ammo').textContent = reloading ? 'RELOADING…' : `${weapon.ammo} / ${weapon.mag}`;
+  $('weapon').innerHTML = WEAPONS.map((w, i) => w === weapon ? `<b>[${i + 1}] ${w.name}</b>` : `<span style="opacity:.5">${i + 1} ${w.name}</span>`).join('<br>');
 }
 
 function tick() {
@@ -409,6 +499,11 @@ function tick() {
     p.position.addScaledVector(p.userData.v, dt);
     if (p.position.y < 0.05) { p.position.y = 0.05; p.userData.v.multiplyScalar(0.5); }
     if ((p.userData.life -= dt) <= 0) { scene.remove(p); particles.splice(i, 1); }
+  }
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    const t = tracers[i];
+    t.userData.life -= dt; t.material.opacity = t.userData.life / 0.25;
+    if (t.userData.life <= 0) { scene.remove(t); t.geometry.dispose(); t.material.dispose(); tracers.splice(i, 1); }
   }
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
