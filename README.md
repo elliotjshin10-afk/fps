@@ -26,6 +26,6 @@ python3 -m http.server 8000
 | 1 / 2 or scroll | Switch rifle / sniper |
 | Right click (hold) | Scope in (sniper) |
 
-Survive endless waves of box monsters. Purple ones are tougher. Kills sometimes heal you.
+Survive endless waves of box monsters. Red ones charge you, purple ones are tougher, and green **spitters** keep their distance and lob glowing orbs (they swell and glow right before firing — strafe or dash to dodge). After each wave, press 1, 2 or 3 to pick one of three random upgrades; they stack for the rest of the run. Kills sometimes heal you.
 
 **Weapons:** the rifle is full-auto with 12 rounds. The sniper has 5 rounds, kills anything in one shot, and pierces through lines of enemies, but it fires slowly and is inaccurate unless scoped.
