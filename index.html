@@ -29,6 +29,15 @@
   #hitmarker::before, #hitmarker::after { content: ""; position: absolute; background: #f33; }
   #hitmarker::before { left: 13px; top: 0; width: 2px; height: 28px; }
   #hitmarker::after { top: 13px; left: 0; height: 2px; width: 28px; }
+  #upgrades { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,.55); text-align: center; }
+  #upgrades h2 { font-size: 28px; letter-spacing: 3px; margin: 0 0 6px; text-shadow: 2px 2px 0 #000; }
+  #upgrades .sub { color: #ccc; margin: 0 0 18px; }
+  #cards { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; padding: 0 16px; }
+  .card { width: 210px; border: 2px solid #4fc3f7; background: rgba(13,17,23,.92); padding: 16px; text-align: left; box-shadow: 4px 4px 0 #000; }
+  .card .k { display: inline-block; background: #4fc3f7; color: #000; font-weight: bold; padding: 0 8px; }
+  .card h3 { margin: 10px 0 4px; font-size: 17px; letter-spacing: 1px; }
+  .card p { margin: 0; color: #bbb; font-size: 13px; }
+  #perks { position: absolute; left: 20px; top: 20px; font-size: 12px; color: #ddd; text-shadow: 1px 1px 0 #000; line-height: 1.4; }
   #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,.75); cursor: pointer; text-align: center; }
   #overlay h1 { font-size: 56px; margin: 0 0 12px; letter-spacing: 4px; }
   #overlay p { margin: 6px; color: #ccc; }
@@ -47,11 +56,13 @@
   <div id="weapon"></div>
   <div id="flylabel">FUEL</div>
   <div id="fuel"><div id="fuelbar"></div></div>
+  <div id="perks"></div>
+  <div id="upgrades"><h2>WAVE CLEAR — PICK AN UPGRADE</h2><p class="sub">Press 1, 2 or 3</p><div id="cards"></div></div>
 </div>
 <div id="overlay">
   <h1>SCRAPPY FPS</h1>
   <p id="msg">Click to play</p>
-  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash<br>F toggle fly (Space up, C down) · 1 / 2 or scroll to switch weapon · Right-click scope (sniper)</p>
+  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash<br>F toggle fly (Space up, C down) · Green spitters shoot — dodge the orbs · 1 / 2 or scroll to switch weapon · Right-click scope (sniper)</p>
 </div>
 
 <script type="importmap">
@@ -155,6 +166,7 @@ const WEAPONS = [
   { name: 'SNIPER', model: sniperModel, mag: 5,  rate: 1100, dmg: 6, auto: false, reloadMs: 1800, pierce: true,  kick: 2.5, flashZ: -1.25 },
 ];
 let weapon = WEAPONS[0];
+const WEAPON_BASE = WEAPONS.map(w => ({ mag: w.mag, rate: w.rate, dmg: w.dmg }));
 
 // ---------- audio (synth blips) ----------
 let actx;
@@ -180,6 +192,10 @@ const DASH_SPEED = 30, DASH_DUR = 0.16, DASH_CD = 1.2;
 let flying = false, fuel = 1;
 const FLY_DRAIN = 1 / 6, FLY_RECHARGE = 1 / 4, FLY_VSPEED = 7, FLY_CEILING = 30;
 const PLAYER_R = 0.4, EYE = 1.6;
+let phase = 'fight';  // 'fight' | 'choose' (upgrade picker open) | 'countdown'
+let stats, perks, offered = [];
+const freshStats = () => ({ maxHp: 100, speedMul: 1, reloadMul: 1, dashCd: DASH_CD, fuelMul: 1, lifesteal: 0 });
+const orbs = [];
 const enemies = [];
 const particles = [];
 const $ = id => document.getElementById(id);
@@ -187,8 +203,11 @@ const $ = id => document.getElementById(id);
 function reset() {
   for (const e of enemies) scene.remove(e.mesh);
   enemies.length = 0;
-  health = 100; score = 0; wave = 0; reloading = false; clearTimeout(reloadTimer);
+  stats = freshStats(); perks = [];
+  WEAPONS.forEach((w, i) => Object.assign(w, WEAPON_BASE[i]));
+  health = stats.maxHp; score = 0; wave = 0; reloading = false; clearTimeout(reloadTimer);
   for (const w of WEAPONS) w.ammo = w.mag;
+  clearOrbs(); phase = 'fight'; $('upgrades').style.display = 'none';
   equip(0, true); lastShot = 0; alive = true; waveTimer = 0;
   player.position.set(0, EYE, 0); vel.set(0, 0, 0);
   player.rotation.y = 0; camera.rotation.x = 0;
@@ -200,25 +219,112 @@ function reset() {
 const enemyGeo = new THREE.BoxGeometry(1, 1.8, 1);
 const eyeGeo = new THREE.BoxGeometry(0.2, 0.15, 0.05);
 const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+const mouthGeo = new THREE.BoxGeometry(0.5, 0.2, 0.05);
+const mouthMat = new THREE.MeshBasicMaterial({ color: 0x0b2e0b });
 function spawnEnemy() {
   let x, z;
   do { x = rnd(-ARENA + 3, ARENA - 3); z = rnd(-ARENA + 3, ARENA - 3); }
   while (Math.hypot(x - player.position.x, z - player.position.z) < 25 || blocked(x, z, 0.6));
-  const tough = Math.random() < Math.min(0.1 * wave, 0.5);
-  const mat = new THREE.MeshLambertMaterial({ color: tough ? 0x6a1b9a : 0xc62828 });
+  // grunt (red, melee) · tough (purple, melee, tanky) · spitter (green, ranged)
+  const spitChance = Math.min(0.12 + 0.05 * wave, 0.35);
+  const type = Math.random() < spitChance ? 'spitter' : Math.random() < Math.min(0.1 * wave, 0.5) ? 'tough' : 'grunt';
+  const color = { grunt: 0xc62828, tough: 0x6a1b9a, spitter: 0x2e7d32 }[type];
+  const mat = new THREE.MeshLambertMaterial({ color });
   const mesh = new THREE.Mesh(enemyGeo, mat);
   mesh.castShadow = true;
   const e1 = new THREE.Mesh(eyeGeo, eyeMat); e1.position.set(-0.2, 0.5, -0.51);
   const e2 = e1.clone(); e2.position.x = 0.2;
   mesh.add(e1, e2);
-  if (tough) mesh.scale.setScalar(1.3);
-  mesh.position.set(x, 0.9 * mesh.scale.y, z);
+  if (type === 'spitter') { const mouth = new THREE.Mesh(mouthGeo, mouthMat); mouth.position.set(0, 0.15, -0.51); mesh.add(mouth); }
+  const size = type === 'tough' ? 1.3 : 1;
+  mesh.scale.setScalar(size);
+  mesh.position.set(x, 0.9 * size, z);
   scene.add(mesh);
   enemies.push({
-    mesh, mat, tough, hp: tough ? 5 : 2, speed: (tough ? 2.5 : 3.5) + wave * 0.25,
-    baseColor: mat.color.getHex(), flash: 0, attackCd: 0, bob: Math.random() * 10,
+    mesh, mat, type, size, tough: type === 'tough',
+    hp: { grunt: 2, tough: 5, spitter: 2 }[type],
+    speed: { grunt: 3.5, tough: 2.5, spitter: 3 }[type] + wave * (type === 'spitter' ? 0.15 : 0.25),
+    baseColor: color, flash: 0, attackCd: 0, bob: Math.random() * 10,
+    fireCd: rnd(1.5, 3), strafe: Math.random() < 0.5 ? 1 : -1,
   });
 }
+
+// ---------- spitter projectiles ----------
+const ORB_DMG = 12;
+const orbGeo = new THREE.SphereGeometry(0.22, 12, 8);
+const orbMat = new THREE.MeshBasicMaterial({ color: 0x76ff03 });
+const orbGlowMat = new THREE.MeshBasicMaterial({ color: 0xb2ff59, transparent: true, opacity: 0.35 });
+const losRay = new THREE.Raycaster();
+function hasLOS(from, to) {
+  const dir = new THREE.Vector3().subVectors(to, from);
+  const len = dir.length();
+  losRay.set(from, dir.normalize()); losRay.far = len;
+  return losRay.intersectObjects(obstacles.map(o => o.mesh), false).length === 0;
+}
+function spit(e) {
+  const from = e.mesh.position.clone(); from.y += 0.2;
+  const target = player.position.clone(); target.y -= 0.5; // aim at the chest, no leading: strafe or dash to dodge
+  if (!hasLOS(from, player.position)) return;
+  const orb = new THREE.Mesh(orbGeo, orbMat);
+  orb.add(new THREE.Mesh(orbGeo, orbGlowMat)); orb.children[0].scale.setScalar(1.8);
+  orb.position.copy(from);
+  orb.userData.v = target.sub(from).normalize().multiplyScalar(Math.min(13 + wave * 0.4, 20));
+  orb.userData.life = 5;
+  scene.add(orb); orbs.push(orb);
+  sfx(220, 0.25, 'sine', 0.12, -120);
+}
+function removeOrb(i) { scene.remove(orbs[i]); orbs.splice(i, 1); }
+function clearOrbs() { while (orbs.length) removeOrb(orbs.length - 1); }
+function updateOrbs(dt) {
+  const pp = player.position;
+  for (let i = orbs.length - 1; i >= 0; i--) {
+    const o = orbs[i];
+    o.position.addScaledVector(o.userData.v, dt);
+    o.rotation.y += dt * 6;
+    // player is a vertical capsule from feet to eye
+    const py = Math.max(pp.y - EYE, Math.min(pp.y, o.position.y));
+    if (Math.hypot(o.position.x - pp.x, o.position.y - py, o.position.z - pp.z) < PLAYER_R + 0.25) {
+      burst(o.position, 0x76ff03, 12); removeOrb(i); damage(ORB_DMG); continue;
+    }
+    if (o.position.y < 0 || (o.userData.life -= dt) <= 0 || obstacles.some(ob => ob.box.containsPoint(o.position))) {
+      burst(o.position, 0x76ff03, 8, 3); removeOrb(i);
+    }
+  }
+}
+
+// ---------- upgrades (pick 1 of 3 between waves) ----------
+const UPGRADES = [
+  { name: 'THICK SKIN',    desc: '+25 max HP and heal 25',      apply: () => { stats.maxHp += 25; health = Math.min(stats.maxHp, health + 25); } },
+  { name: 'PATCH UP',      desc: 'Heal to full',                apply: () => { health = stats.maxHp; }, ok: () => health < stats.maxHp * 0.8 },
+  { name: 'QUICK HANDS',   desc: 'Reload 25% faster',           apply: () => { stats.reloadMul *= 0.75; } },
+  { name: 'HAIR TRIGGER',  desc: 'Rifle fires 20% faster',      apply: () => { WEAPONS[0].rate *= 0.8; } },
+  { name: 'HOLLOW POINTS', desc: 'Rifle damage +50%',           apply: () => { WEAPONS[0].dmg += 0.5; } },
+  { name: 'EXTENDED MAGS', desc: '+6 rifle and +2 sniper rounds', apply: () => { WEAPONS[0].mag += 6; WEAPONS[1].mag += 2; WEAPONS.forEach(w => w.ammo = w.mag); } },
+  { name: 'HEAVY BOLT',    desc: 'Sniper fires 25% faster',     apply: () => { WEAPONS[1].rate *= 0.75; } },
+  { name: 'LIGHT FEET',    desc: 'Move 12% faster',             apply: () => { stats.speedMul *= 1.12; } },
+  { name: 'BLINK',         desc: 'Dash cooldown -30%',          apply: () => { stats.dashCd = Math.max(0.3, stats.dashCd * 0.7); }, ok: () => stats.dashCd > 0.3 },
+  { name: 'BIG TANK',      desc: 'Fly 50% longer',              apply: () => { stats.fuelMul *= 1.5; } },
+  { name: 'VAMPIRE',       desc: 'Heal 4 HP on every kill',     apply: () => { stats.lifesteal += 4; } },
+];
+function openUpgrades() {
+  phase = 'choose'; mouseDown = false; scoped = false;
+  clearOrbs();
+  const pool = UPGRADES.filter(u => !u.ok || u.ok());
+  offered = [];
+  while (offered.length < 3 && pool.length) offered.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  $('cards').innerHTML = offered.map((u, i) => `<div class="card"><span class="k">${i + 1}</span><h3>${u.name}</h3><p>${u.desc}</p></div>`).join('');
+  $('upgrades').style.display = 'flex';
+  sfx(520, 0.15, 'triangle', 0.1, 200);
+}
+function pickUpgrade(i) {
+  const u = offered[i];
+  if (phase !== 'choose' || !u) return;
+  u.apply(); perks.push(u.name);
+  $('upgrades').style.display = 'none';
+  phase = 'countdown'; waveTimer = 0;
+  sfx(660, 0.2, 'triangle', 0.12, 400);
+}
+
 function nextWave() {
   wave++;
   const n = 3 + wave * 2;
@@ -275,7 +381,7 @@ function tracer(from, to) {
 function shoot() {
   const now = performance.now();
   const w = weapon;
-  if (!alive || reloading || switchT > 0 || now - lastShot < w.rate) return;
+  if (!alive || phase === 'choose' || reloading || switchT > 0 || now - lastShot < w.rate) return;
   if (w.ammo <= 0) { sfx(120, 0.05, 'square', 0.05); reload(); return; }
   lastShot = now; w.ammo--; recoil = w.kick;
   flash.visible = !scoped; setTimeout(() => flash.visible = false, 40);
@@ -316,15 +422,16 @@ function reload() {
   if (reloading || w.ammo === w.mag || switchT > 0) return;
   reloading = true; scoped = false;
   sfx(400, 0.1, 'triangle', 0.1);
-  reloadTimer = setTimeout(() => { w.ammo = w.mag; reloading = false; sfx(600, 0.1, 'triangle', 0.1); }, w.reloadMs);
+  reloadTimer = setTimeout(() => { w.ammo = w.mag; reloading = false; sfx(600, 0.1, 'triangle', 0.1); }, w.reloadMs * stats.reloadMul);
 }
 function kill(e) {
   burst(e.mesh.position, e.baseColor, 30, 6);
   scene.remove(e.mesh);
   enemies.splice(enemies.indexOf(e), 1);
-  score += e.tough ? 250 : 100;
+  score += { grunt: 100, tough: 250, spitter: 150 }[e.type];
   sfx(200, 0.3, 'square', 0.15, -180);
-  if (Math.random() < 0.15) health = Math.min(100, health + 15);
+  if (Math.random() < 0.15) health += 15;
+  health = Math.min(stats.maxHp, health + stats.lifesteal);
 }
 
 // ---------- particles ----------
@@ -372,7 +479,8 @@ document.addEventListener('mousemove', e => {
   camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x - e.movementY * sens));
 });
 addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); if (e.code === 'KeyQ') wantDash = true; if (e.code === 'KeyF' && !e.repeat) toggleFly();
-  if (e.code === 'Digit1') equip(0); if (e.code === 'Digit2') equip(1); });
+  const n = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
+  if (n >= 0) { if (phase === 'choose') pickUpgrade(n); else equip(n); } });
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -407,7 +515,8 @@ function update(dt) {
   if (!alive || !document.pointerLockElement) return;
 
   // movement
-  const speed = (keys.ShiftLeft ? 9 : 5.5) * (flying ? 1.4 : 1);
+  if (phase === 'choose') return; // world is frozen while picking an upgrade
+  const speed = (keys.ShiftLeft ? 9 : 5.5) * (flying ? 1.4 : 1) * stats.speedMul;
   player.getWorldDirection(fwd); fwd.y = 0; fwd.normalize().negate();
   right.crossVectors(fwd, THREE.Object3D.DEFAULT_UP);
   const move = new THREE.Vector3();
@@ -422,7 +531,7 @@ function update(dt) {
   dashCd -= dt;
   if (wantDash && dashCd <= 0) {
     dashDir.copy(move.lengthSq() ? move : fwd).setY(0).normalize();
-    dashTime = DASH_DUR; dashCd = DASH_CD;
+    dashTime = DASH_DUR; dashCd = stats.dashCd;
     if (vel.y < 0) vel.y = 0;
     sfx(500, 0.18, 'sine', 0.15, 700);
   }
@@ -441,7 +550,7 @@ function update(dt) {
 
   // fly: no gravity, Space rises, C sinks, burns fuel; fuel recharges on the ground
   if (flying) {
-    fuel -= FLY_DRAIN * dt;
+    fuel -= FLY_DRAIN / stats.fuelMul * dt;
     if (fuel <= 0) { fuel = 0; flying = false; sfx(150, 0.3, 'sawtooth', 0.12, -100); }
   } else if (onGround) fuel = Math.min(1, fuel + FLY_RECHARGE * dt);
 
@@ -486,32 +595,56 @@ function update(dt) {
     const dx = pp.x - m.position.x, dz = pp.z - m.position.z;
     const dist = Math.hypot(dx, dz);
     m.rotation.y = Math.atan2(-dx, -dz);
-    if (dist > 1.2) {
+    // desired direction: melee enemies charge; spitters hold 12-20 units away and strafe
+    let mx = dx / dist, mz = dz / dist;
+    if (e.type === 'spitter') {
+      if (dist < 12) { mx = -mx; mz = -mz; }
+      else if (dist < 20) { const t = mx; mx = -mz * e.strafe; mz = t * e.strafe; if (Math.random() < dt * 0.4) e.strafe *= -1; }
+    }
+    if (dist > 1.2 || e.type === 'spitter') {
       const step = e.speed * dt;
-      let ex = m.position.x + (dx / dist) * step, ez = m.position.z + (dz / dist) * step;
+      const ex = m.position.x + mx * step, ez = m.position.z + mz * step;
       // dumb wall-sliding
       if (!blocked(ex, m.position.z, 0.5)) m.position.x = ex;
-      else if (!blocked(m.position.x, m.position.z + Math.sign(dz || 1) * step, 0.5)) m.position.z += Math.sign(dz || 1) * step;
+      else if (!blocked(m.position.x, m.position.z + Math.sign(mz || 1) * step, 0.5)) m.position.z += Math.sign(mz || 1) * step;
       if (!blocked(m.position.x, ez, 0.5)) m.position.z = ez;
-      else if (!blocked(m.position.x + Math.sign(dx || 1) * step, m.position.z, 0.5)) m.position.x += Math.sign(dx || 1) * step;
+      else if (!blocked(m.position.x + Math.sign(mx || 1) * step, m.position.z, 0.5)) m.position.x += Math.sign(mx || 1) * step;
     }
+    // spitters swell and glow for 0.5s before firing, so you can see it coming
+    let charging = false;
+    if (e.type === 'spitter') {
+      e.fireCd -= dt;
+      charging = e.fireCd < 0.5;
+      if (e.fireCd <= 0) {
+        e.fireCd = rnd(2, 3) - Math.min(wave * 0.05, 0.6);
+        if (Math.hypot(dx, dz, pp.y - m.position.y) < 45) spit(e);
+      }
+    }
+    m.scale.setScalar(e.size * (charging ? 1 + 0.12 * Math.sin(e.fireCd * 40) ** 2 : 1));
     e.bob += dt * 10;
-    m.position.y = 0.9 * m.scale.y + Math.abs(Math.sin(e.bob)) * 0.15;
+    m.position.y = 0.9 * e.size + Math.abs(Math.sin(e.bob)) * 0.15;
     e.attackCd -= dt;
     if (dist < 1.6 && Math.abs(pp.y - EYE - 0) < 2 && e.attackCd <= 0) { e.attackCd = 0.8; damage(10); }
     e.flash -= dt;
-    e.mat.color.setHex(e.flash > 0 ? 0xffffff : e.baseColor);
+    e.mat.color.setHex(e.flash > 0 ? 0xffffff : charging ? 0xb2ff59 : e.baseColor);
   }
+  updateOrbs(dt);
 
-  if (enemies.length === 0) {
+  if (enemies.length === 0 && phase === 'fight') {
     waveTimer += dt;
-    $('wave').textContent = `WAVE ${wave} CLEAR — next in ${Math.ceil(3 - waveTimer)}`;
-    if (waveTimer > 3) { waveTimer = 0; nextWave(); }
+    $('wave').textContent = `WAVE ${wave} CLEAR`;
+    if (waveTimer > 1) openUpgrades();
+  }
+  if (phase === 'countdown') {
+    waveTimer += dt;
+    $('wave').textContent = `WAVE ${wave + 1} in ${Math.ceil(2 - waveTimer)}`;
+    if (waveTimer > 2) { waveTimer = 0; phase = 'fight'; nextWave(); }
   }
 
   // HUD
-  $('stats').innerHTML = `HP ${Math.ceil(health)}<br>SCORE ${score}<br>ENEMIES ${enemies.length}`;
-  $('dashbar').style.width = `${100 * (1 - Math.max(0, dashCd) / DASH_CD)}%`;
+  $('perks').innerHTML = perks.length ? 'UPGRADES<br>' + perks.join('<br>') : '';
+  $('stats').innerHTML = `HP ${Math.ceil(health)} / ${stats.maxHp}<br>SCORE ${score}<br>ENEMIES ${enemies.length}`;
+  $('dashbar').style.width = `${100 * (1 - Math.max(0, dashCd) / stats.dashCd)}%`;
   $('dashbar').style.background = dashCd <= 0 ? '#4fc3f7' : '#888';
   $('fuelbar').style.width = `${fuel * 100}%`;
   $('fuelbar').style.background = flying ? '#ff7043' : fuel < 0.1 ? '#888' : '#ffb74d';
