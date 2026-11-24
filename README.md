@@ -21,6 +21,7 @@ python3 -m http.server 8000
 | Space | Jump (you can climb onto crates) |
 | Shift | Sprint |
 | Q | Dash (short burst, 1.2s cooldown) |
+| F | Toggle fly (Space rises, C sinks; burns fuel, recharges on the ground) |
 | R | Reload |
 | 1 / 2 or scroll | Switch rifle / sniper |
 | Right click (hold) | Scope in (sniper) |

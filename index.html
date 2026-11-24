@@ -15,6 +15,9 @@
   #ammo { position: absolute; right: 20px; bottom: 20px; font-size: 28px; text-shadow: 2px 2px 0 #000; }
   #dash { position: absolute; right: 20px; bottom: 60px; width: 120px; height: 8px; background: rgba(255,255,255,.2); }
   #dash div { height: 100%; width: 100%; background: #4fc3f7; }
+  #fuel { position: absolute; left: 20px; bottom: 120px; width: 120px; height: 8px; background: rgba(255,255,255,.2); }
+  #fuel div { height: 100%; width: 100%; background: #ffb74d; }
+  #flylabel { position: absolute; left: 20px; bottom: 132px; font-size: 14px; text-shadow: 2px 2px 0 #000; }
   #scope { position: absolute; inset: 0; display: none; background: radial-gradient(circle at center, transparent 0, transparent 34vmin, #000 34.3vmin); }
   #scope::before, #scope::after { content: ""; position: absolute; background: #000; }
   #scope::before { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-1px); }
@@ -42,11 +45,13 @@
   <div id="ammo"></div>
   <div id="dash"><div id="dashbar"></div></div>
   <div id="weapon"></div>
+  <div id="flylabel">FUEL</div>
+  <div id="fuel"><div id="fuelbar"></div></div>
 </div>
 <div id="overlay">
   <h1>SCRAPPY FPS</h1>
   <p id="msg">Click to play</p>
-  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash<br>1 / 2 or scroll to switch weapon · Right-click scope (sniper)</p>
+  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash<br>F toggle fly (Space up, C down) · 1 / 2 or scroll to switch weapon · Right-click scope (sniper)</p>
 </div>
 
 <script type="importmap">
@@ -172,6 +177,8 @@ let health, score, wave, reloading, reloadTimer, lastShot, alive, waveTimer, sco
 let dashTime = 0, dashCd = 0;
 const dashDir = new THREE.Vector3();
 const DASH_SPEED = 30, DASH_DUR = 0.16, DASH_CD = 1.2;
+let flying = false, fuel = 1;
+const FLY_DRAIN = 1 / 6, FLY_RECHARGE = 1 / 4, FLY_VSPEED = 7, FLY_CEILING = 30;
 const PLAYER_R = 0.4, EYE = 1.6;
 const enemies = [];
 const particles = [];
@@ -185,7 +192,7 @@ function reset() {
   equip(0, true); lastShot = 0; alive = true; waveTimer = 0;
   player.position.set(0, EYE, 0); vel.set(0, 0, 0);
   player.rotation.y = 0; camera.rotation.x = 0;
-  dashTime = 0; dashCd = 0;
+  dashTime = 0; dashCd = 0; flying = false; fuel = 1;
   nextWave();
 }
 
@@ -364,7 +371,7 @@ document.addEventListener('mousemove', e => {
   player.rotation.y -= e.movementX * sens;
   camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x - e.movementY * sens));
 });
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); if (e.code === 'KeyQ') wantDash = true;
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); if (e.code === 'KeyQ') wantDash = true; if (e.code === 'KeyF' && !e.repeat) toggleFly();
   if (e.code === 'Digit1') equip(0); if (e.code === 'Digit2') equip(1); });
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('resize', () => {
@@ -376,6 +383,14 @@ addEventListener('resize', () => {
 const clock = new THREE.Clock();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 let bobT = 0, wantDash = false;
+
+function toggleFly() {
+  if (!alive) return;
+  if (!flying && fuel < 0.1) { sfx(120, 0.1, 'square', 0.06); return; } // not enough fuel
+  flying = !flying;
+  if (flying && onGround) vel.y = 5; // little hop off the ground
+  sfx(flying ? 300 : 500, 0.2, 'sine', 0.12, flying ? 400 : -300);
+}
 
 function damage(n) {
   health -= n;
@@ -392,7 +407,7 @@ function update(dt) {
   if (!alive || !document.pointerLockElement) return;
 
   // movement
-  const speed = keys.ShiftLeft ? 9 : 5.5;
+  const speed = (keys.ShiftLeft ? 9 : 5.5) * (flying ? 1.4 : 1);
   player.getWorldDirection(fwd); fwd.y = 0; fwd.normalize().negate();
   right.crossVectors(fwd, THREE.Object3D.DEFAULT_UP);
   const move = new THREE.Vector3();
@@ -424,8 +439,19 @@ function update(dt) {
   $('crosshair').style.display = scoped ? 'none' : 'block';
   gun.visible = !fullyScoped;
 
-  if (keys.Space && onGround) { vel.y = 7; onGround = false; }
-  vel.y -= 20 * dt;
+  // fly: no gravity, Space rises, C sinks, burns fuel; fuel recharges on the ground
+  if (flying) {
+    fuel -= FLY_DRAIN * dt;
+    if (fuel <= 0) { fuel = 0; flying = false; sfx(150, 0.3, 'sawtooth', 0.12, -100); }
+  } else if (onGround) fuel = Math.min(1, fuel + FLY_RECHARGE * dt);
+
+  if (flying) {
+    const targetVy = ((keys.Space ? 1 : 0) - (keys.KeyC ? 1 : 0)) * FLY_VSPEED;
+    vel.y += (targetVy - vel.y) * Math.min(1, dt * 6);
+  } else {
+    if (keys.Space && onGround) { vel.y = 7; onGround = false; }
+    vel.y -= 20 * dt;
+  }
 
   const feet = player.position.y - EYE;
   // substep horizontal movement so fast dashes can't tunnel through walls
@@ -438,6 +464,7 @@ function update(dt) {
   }
 
   player.position.y += vel.y * dt;
+  if (player.position.y > FLY_CEILING) { player.position.y = FLY_CEILING; vel.y = Math.min(vel.y, 0); }
   const gh = groundHeight(player.position.x, player.position.z, feet);
   if (player.position.y - EYE <= gh) { player.position.y = gh + EYE; vel.y = 0; onGround = true; }
   else onGround = false;
@@ -486,6 +513,9 @@ function update(dt) {
   $('stats').innerHTML = `HP ${Math.ceil(health)}<br>SCORE ${score}<br>ENEMIES ${enemies.length}`;
   $('dashbar').style.width = `${100 * (1 - Math.max(0, dashCd) / DASH_CD)}%`;
   $('dashbar').style.background = dashCd <= 0 ? '#4fc3f7' : '#888';
+  $('fuelbar').style.width = `${fuel * 100}%`;
+  $('fuelbar').style.background = flying ? '#ff7043' : fuel < 0.1 ? '#888' : '#ffb74d';
+  $('flylabel').textContent = flying ? 'FLYING' : 'FUEL';
   $('ammo').textContent = reloading ? 'RELOADING…' : `${weapon.ammo} / ${weapon.mag}`;
   $('weapon').innerHTML = WEAPONS.map((w, i) => w === weapon ? `<b>[${i + 1}] ${w.name}</b>` : `<span style="opacity:.5">${i + 1} ${w.name}</span>`).join('<br>');
 }
