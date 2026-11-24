@@ -20,6 +20,7 @@ python3 -m http.server 8000
 | Left click (hold) | Shoot |
 | Space | Jump (you can climb onto crates) |
 | Shift | Sprint |
+| Q | Dash (short burst, 1.2s cooldown) |
 | R | Reload |
 
 Survive endless waves of box monsters. Purple ones are tougher. Kills sometimes heal you.

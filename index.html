@@ -13,6 +13,8 @@
   #crosshair::after { top: 7px; left: 0; height: 2px; width: 16px; }
   #stats { position: absolute; left: 20px; bottom: 20px; font-size: 20px; text-shadow: 2px 2px 0 #000; line-height: 1.5; }
   #ammo { position: absolute; right: 20px; bottom: 20px; font-size: 28px; text-shadow: 2px 2px 0 #000; }
+  #dash { position: absolute; right: 20px; bottom: 60px; width: 120px; height: 8px; background: rgba(255,255,255,.2); }
+  #dash div { height: 100%; width: 100%; background: #4fc3f7; }
   #wave { position: absolute; top: 20px; width: 100%; text-align: center; font-size: 22px; text-shadow: 2px 2px 0 #000; }
   #hurt { position: absolute; inset: 0; background: radial-gradient(transparent 40%, rgba(255,0,0,.6)); opacity: 0; transition: opacity .3s; }
   #hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) rotate(45deg); width: 28px; height: 28px; opacity: 0; }
@@ -32,11 +34,12 @@
   <div id="wave"></div>
   <div id="stats"></div>
   <div id="ammo"></div>
+  <div id="dash"><div id="dashbar"></div></div>
 </div>
 <div id="overlay">
   <h1>SCRAPPY FPS</h1>
   <p id="msg">Click to play</p>
-  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint</p>
+  <p>WASD move · Mouse look · Click shoot · Space jump · R reload · Shift sprint · Q dash</p>
 </div>
 
 <script type="importmap">
@@ -136,6 +139,9 @@ const keys = {};
 const vel = new THREE.Vector3();
 let onGround = true;
 let health, score, wave, ammo, reloading, lastShot, alive, waveTimer;
+let dashTime = 0, dashCd = 0;
+const dashDir = new THREE.Vector3();
+const DASH_SPEED = 30, DASH_DUR = 0.16, DASH_CD = 1.2;
 const MAG = 12, PLAYER_R = 0.4, EYE = 1.6;
 const enemies = [];
 const particles = [];
@@ -147,6 +153,7 @@ function reset() {
   health = 100; score = 0; wave = 0; ammo = MAG; reloading = false; lastShot = 0; alive = true; waveTimer = 0;
   player.position.set(0, EYE, 0); vel.set(0, 0, 0);
   player.rotation.y = 0; camera.rotation.x = 0;
+  dashTime = 0; dashCd = 0;
   nextWave();
 }
 
@@ -275,7 +282,7 @@ document.addEventListener('mousemove', e => {
   player.rotation.y -= e.movementX * 0.0022;
   camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x - e.movementY * 0.0022));
 });
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyR') reload(); if (e.code === 'KeyQ') wantDash = true; });
 addEventListener('keyup', e => keys[e.code] = false);
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -285,7 +292,7 @@ addEventListener('resize', () => {
 // ---------- loop ----------
 const clock = new THREE.Clock();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
-let bobT = 0;
+let bobT = 0, wantDash = false;
 
 function damage(n) {
   health -= n;
@@ -313,14 +320,35 @@ function update(dt) {
   if (move.lengthSq()) move.normalize().multiplyScalar(speed);
   vel.x = move.x; vel.z = move.z;
 
+  // dash: short burst in move direction (or forward), with cooldown
+  dashCd -= dt;
+  if (wantDash && dashCd <= 0) {
+    dashDir.copy(move.lengthSq() ? move : fwd).setY(0).normalize();
+    dashTime = DASH_DUR; dashCd = DASH_CD;
+    if (vel.y < 0) vel.y = 0;
+    sfx(500, 0.18, 'sine', 0.15, 700);
+  }
+  wantDash = false;
+  if (dashTime > 0) {
+    dashTime -= dt;
+    vel.x = dashDir.x * DASH_SPEED; vel.z = dashDir.z * DASH_SPEED;
+    vel.y = Math.max(vel.y, 0); // hang in the air briefly
+  }
+  const targetFov = 75 + (dashTime > 0 ? 15 : 0);
+  if (Math.abs(camera.fov - targetFov) > 0.1) { camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 15); camera.updateProjectionMatrix(); }
+
   if (keys.Space && onGround) { vel.y = 7; onGround = false; }
   vel.y -= 20 * dt;
 
   const feet = player.position.y - EYE;
-  const nx = player.position.x + vel.x * dt;
-  if (!blocked(nx, player.position.z, PLAYER_R, feet + 0.05)) player.position.x = nx;
-  const nz = player.position.z + vel.z * dt;
-  if (!blocked(player.position.x, nz, PLAYER_R, feet + 0.05)) player.position.z = nz;
+  // substep horizontal movement so fast dashes can't tunnel through walls
+  const steps = Math.ceil(Math.hypot(vel.x, vel.z) * dt / 0.2) || 1;
+  for (let i = 0; i < steps; i++) {
+    const nx = player.position.x + vel.x * dt / steps;
+    if (!blocked(nx, player.position.z, PLAYER_R, feet + 0.05)) player.position.x = nx;
+    const nz = player.position.z + vel.z * dt / steps;
+    if (!blocked(player.position.x, nz, PLAYER_R, feet + 0.05)) player.position.z = nz;
+  }
 
   player.position.y += vel.y * dt;
   const gh = groundHeight(player.position.x, player.position.z, feet);
@@ -367,6 +395,8 @@ function update(dt) {
 
   // HUD
   $('stats').innerHTML = `HP ${Math.ceil(health)}<br>SCORE ${score}<br>ENEMIES ${enemies.length}`;
+  $('dashbar').style.width = `${100 * (1 - Math.max(0, dashCd) / DASH_CD)}%`;
+  $('dashbar').style.background = dashCd <= 0 ? '#4fc3f7' : '#888';
   $('ammo').textContent = reloading ? 'RELOADING…' : `${ammo} / ${MAG}`;
 }
 
